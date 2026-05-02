@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: ps99-cwbot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: RENDER_URL
+        sync: false
+      - key: GITHUB_GIST_ID
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: PORT
+        value: "3000"
+    disk:
+      name: botdata
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
