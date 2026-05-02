@@ -50,17 +50,34 @@ async def get_top_clans(session: aiohttp.ClientSession, n: int = 10) -> list:
     return result[:n]
 
 async def get_clan_rank(session: aiohttp.ClientSession, name: str) -> int | None:
-    """Scan leaderboard pages to find rank of a clan."""
+    """
+    Scan leaderboard pages PARALLEL (10 pages at once) to find rank fast.
+    A clan at rank #96 is found in ~2 API calls instead of 5 sequential ones.
+    """
     name_up = name.upper()
-    for page in range(1, RANK_SEARCH_PAGES + 1):
-        batch = await get_clans_page(session, page=page, page_size=20)
-        if not batch:
-            break
-        for i, c in enumerate(batch):
-            if (c.get("Name") or "").upper() == name_up:
-                return (page - 1) * 20 + i + 1
-        if len(batch) < 20:
-            break
+    BATCH = 10        # pages per parallel round
+    PAGE_SIZE = 20
+
+    for start in range(1, RANK_SEARCH_PAGES + 1, BATCH):
+        pages = list(range(start, min(start + BATCH, RANK_SEARCH_PAGES + 1)))
+
+        results = await asyncio.gather(
+            *[get_clans_page(session, page=p, page_size=PAGE_SIZE) for p in pages],
+            return_exceptions=True
+        )
+
+        for p, batch in zip(pages, results):
+            if not batch or isinstance(batch, Exception):
+                continue
+            for i, c in enumerate(batch):
+                if (c.get("Name") or "").upper() == name_up:
+                    return (p - 1) * PAGE_SIZE + i + 1
+
+        # If any page returned < PAGE_SIZE results, we've hit the end
+        for batch in results:
+            if isinstance(batch, list) and 0 < len(batch) < PAGE_SIZE:
+                return None
+
     return None
 
 async def get_active_clan_battle(session: aiohttp.ClientSession) -> dict | None:
