@@ -1,24 +1,15 @@
 """
-db.py  –  JSON-basierte Datenbank mit optionalem GitHub-Gist-Backup
-Struktur:
-  guilds    → {guild_id: {clans: {clan_name: {channel_id, notifs}}}}
-  snapshots → {CLAN: [{ts, points, rank, members:[uid], diamonds}]}
-  donations → {CLAN: [{roblox_user, amount, discord_uid, ts}]}
-  ranks     → {CLAN: int}
-  uid_cache → {uid_str: username}   (Roblox name cache)
+db.py  –  JSON-Datenbank mit GitHub-Gist-Backup
 """
 
-import json
-import time
-import asyncio
+import json, time, copy
 from pathlib import Path
 import aiohttp
-
 from config import MAX_SNAPSHOTS, GIST_ID, GITHUB_TOKEN
 
 DB_PATH = Path("data/db.json")
 
-_DEFAULT: dict = {
+_EMPTY = {
     "guilds":    {},
     "snapshots": {},
     "donations": {},
@@ -28,28 +19,28 @@ _DEFAULT: dict = {
 
 _db: dict = {}
 
-# ── load / save ────────────────────────────────────────────────────────────────
+# ── load / save ────────────────────────────────────────────────────
 
 def _load():
     global _db
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    loaded = {}
     if DB_PATH.exists():
         try:
-            _db = json.loads(DB_PATH.read_text("utf-8"))
-            # ensure all top-level keys exist
-            for k, v in _DEFAULT.items():
-                _db.setdefault(k, type(v)())
-            print("✅ DB geladen")
-            return
+            loaded = json.loads(DB_PATH.read_text("utf-8"))
         except Exception as e:
             print(f"⚠️  DB load error: {e}")
-    import copy
-    _db = copy.deepcopy(_DEFAULT)
+    # Merge: stelle sicher dass ALLE keys vorhanden sind
+    _db = copy.deepcopy(_EMPTY)
+    for k in _EMPTY:
+        if k in loaded:
+            _db[k] = loaded[k]
     _save_sync()
-    print("✅ Neue DB erstellt")
+    print("✅ DB geladen")
 
 def _save_sync():
     try:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         DB_PATH.write_text(json.dumps(_db, indent=2, ensure_ascii=False), "utf-8")
     except Exception as e:
         print(f"❌ DB save error: {e}")
@@ -57,7 +48,7 @@ def _save_sync():
 def save():
     _save_sync()
 
-# ── Gist backup ────────────────────────────────────────────────────────────────
+# ── Gist ───────────────────────────────────────────────────────────
 
 async def gist_backup():
     if not GIST_ID or not GITHUB_TOKEN:
@@ -87,16 +78,33 @@ async def gist_restore():
                 content = (data.get("files") or {}).get("ps99cwbot_db.json", {}).get("content")
                 if content:
                     global _db
-                    _db = json.loads(content)
+                    loaded = json.loads(content)
+                    _db = copy.deepcopy(_EMPTY)
+                    for k in _EMPTY:
+                        if k in loaded:
+                            _db[k] = loaded[k]
                     _save_sync()
                     print("✅ DB von Gist geladen")
     except Exception as e:
         print(f"⚠️  Gist restore: {e}")
 
-# ── guild / tracking ───────────────────────────────────────────────────────────
+# ── safe getter ────────────────────────────────────────────────────
+
+def _g(key: str) -> dict:
+    """Sicherer Zugriff – stellt sicher dass der key immer existiert."""
+    if key not in _db:
+        _db[key] = copy.deepcopy(_EMPTY[key])
+    return _db[key]
+
+# ── guild / tracking ───────────────────────────────────────────────
 
 def _guild(guild_id: str) -> dict:
-    return _db["guilds"].setdefault(guild_id, {"clans": {}})
+    guilds = _g("guilds")
+    if guild_id not in guilds:
+        guilds[guild_id] = {"clans": {}}
+    if "clans" not in guilds[guild_id]:
+        guilds[guild_id]["clans"] = {}
+    return guilds[guild_id]
 
 def track_clan(guild_id: str, clan_name: str, channel_id: str):
     clan_up = clan_name.upper()
@@ -124,14 +132,11 @@ def get_clan_entry(guild_id: str, clan_name: str) -> dict | None:
     return _guild(guild_id)["clans"].get(clan_name.upper())
 
 def get_server_clans(guild_id: str) -> dict:
-    """Returns {CLAN_NAME: entry} for one guild."""
     return _guild(guild_id).get("clans", {})
 
 def get_all_tracked() -> list[dict]:
-    """All tracked entries across all guilds.
-    Returns list of {guild_id, clan_name, channel_id, notifs}."""
     result = []
-    for gid, gdata in _db["guilds"].items():
+    for gid, gdata in _g("guilds").items():
         for cname, cdata in gdata.get("clans", {}).items():
             result.append({
                 "guild_id":   gid,
@@ -155,12 +160,11 @@ def get_notif(guild_id: str, clan_name: str, key: str) -> bool:
         return False
     return entry.get("notifs", {}).get(key, True)
 
-# ── snapshots (Pull → Save → Compare) ────────────────────────────────────────
+# ── snapshots ──────────────────────────────────────────────────────
 
-def push_snapshot(clan_name: str, points: int, rank, members: list[int], diamonds: float):
-    """Push a new snapshot. Oldest are discarded after MAX_SNAPSHOTS."""
+def push_snapshot(clan_name: str, points: int, rank, members: list, diamonds: float):
     key = clan_name.upper()
-    snaps = _db["snapshots"].setdefault(key, [])
+    snaps = _g("snapshots").setdefault(key, [])
     snaps.insert(0, {
         "ts":       int(time.time()),
         "points":   points,
@@ -168,36 +172,36 @@ def push_snapshot(clan_name: str, points: int, rank, members: list[int], diamond
         "members":  members,
         "diamonds": diamonds,
     })
-    _db["snapshots"][key] = snaps[:MAX_SNAPSHOTS]
+    _g("snapshots")[key] = snaps[:MAX_SNAPSHOTS]
     save()
 
 def latest_snapshot(clan_name: str) -> dict | None:
-    snaps = _db["snapshots"].get(clan_name.upper(), [])
+    snaps = _g("snapshots").get(clan_name.upper(), [])
     return snaps[0] if snaps else None
 
 def get_snapshots(clan_name: str, n: int = 24) -> list:
-    return _db["snapshots"].get(clan_name.upper(), [])[:n]
+    return _g("snapshots").get(clan_name.upper(), [])[:n]
 
 def hourly_diff(clan_name: str) -> int | None:
-    snaps = _db["snapshots"].get(clan_name.upper(), [])
+    snaps = _g("snapshots").get(clan_name.upper(), [])
     if len(snaps) < 2:
         return None
     return snaps[0]["points"] - snaps[1]["points"]
 
-# ── rank cache ─────────────────────────────────────────────────────────────────
+# ── ranks ──────────────────────────────────────────────────────────
 
 def save_rank(clan_name: str, rank: int):
-    _db["ranks"][clan_name.upper()] = rank
+    _g("ranks")[clan_name.upper()] = rank
     save()
 
 def last_rank(clan_name: str) -> int | None:
-    return _db["ranks"].get(clan_name.upper())
+    return _g("ranks").get(clan_name.upper())
 
-# ── diamond donations ──────────────────────────────────────────────────────────
+# ── donations ──────────────────────────────────────────────────────
 
 def add_donation(clan: str, roblox_user: str, amount: float, discord_uid: str):
     clan_up = clan.upper()
-    clan_donations = _db["donations"].setdefault(clan_up, [])
+    clan_donations = _g("donations").setdefault(clan_up, [])
     existing = next(
         (d for d in clan_donations if d["roblox_user"].lower() == roblox_user.lower()),
         None
@@ -216,19 +220,19 @@ def add_donation(clan: str, roblox_user: str, amount: float, discord_uid: str):
     save()
 
 def get_donations(clan: str) -> list:
-    return _db["donations"].get(clan.upper(), [])
+    return _g("donations").get(clan.upper(), [])
 
 def clan_diamond_total(clan: str) -> float:
     return sum(d["amount"] for d in get_donations(clan))
 
-# ── Roblox name cache ──────────────────────────────────────────────────────────
+# ── name cache ─────────────────────────────────────────────────────
 
 def cache_name(uid: int, name: str):
-    _db["uid_cache"][str(uid)] = name
+    _g("uid_cache")[str(uid)] = name
     save()
 
-def cached_name(uid: int) -> str | None:
-    return _db["uid_cache"].get(str(uid))
+def cached_name(uid) -> str | None:
+    return _g("uid_cache").get(str(uid))
 
-# ── init ───────────────────────────────────────────────────────────────────────
+# ── init ───────────────────────────────────────────────────────────
 _load()
