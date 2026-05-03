@@ -12,9 +12,9 @@ from monitor import Monitor
 from keepalive import keep_alive
 import db
 
-# ── Bot-Setup ─────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
+
 
 class CWBot(commands.Bot):
     def __init__(self):
@@ -22,19 +22,14 @@ class CWBot(commands.Bot):
         self.monitor = Monitor(self)
 
     async def setup_hook(self):
-        # Cogs laden
         await self.load_extension("cogs.clan")
         await self.load_extension("cogs.tracking")
-        await self.load_extension("cogs.diamonds")
+        await self.load_extension("cogs.economy")
 
-        # Slash-Commands global registrieren
         synced = await self.tree.sync()
         print(f"✅ {len(synced)} Slash-Commands registriert")
 
-        # Gist-Backup wiederherstellen (falls vorhanden)
         await db.gist_restore()
-
-        # Monitor starten
         self.monitor.start()
 
     async def on_ready(self):
@@ -54,29 +49,25 @@ class CWBot(commands.Bot):
 
 bot = CWBot()
 
-# ── !help override ─────────────────────────────────────────────────────────────
+
 @bot.command(name="help")
 async def help_cmd(ctx):
-    e = discord.Embed(
-        title="🐾 PS99 ClanWar Bot – Commands",
-        color=0x5865F2
-    )
-    e.add_field(name="📋 Prefix Commands", value=(
-        "`!cb <clan>` – Großes Clan-Dashboard\n"
+    e = discord.Embed(title="🐾 PS99 ClanWar Bot – Commands", color=0x5865F2)
+    e.add_field(name="📋 Prefix", value="`!cb <clan>` – Clan Board (Image)", inline=False)
+    e.add_field(name="📡 Set Channels", value=(
+        "`/set clanrank` `/set diamonds`\n"
+        "`/set hourlystats` `/set joinleave`"
     ), inline=False)
-    e.add_field(name="🏆 Clan", value=(
-        "`/clan` `/clan_rank` `/clan_stats`\n"
-        "`/top_clans` `/contributors` `/member_stats`"
+    e.add_field(name="🔕 Disable", value=(
+        "`/disable clanrank` `/disable diamonds`\n"
+        "`/disable hourlystats` `/disable joinleave`"
     ), inline=False)
-    e.add_field(name="📡 Tracking", value=(
-        "`/clan_track` `/clan_untrack` `/clan_list`"
+    e.add_field(name="🔍 Search", value=(
+        "`/search` `/history` `/dailystars`\n"
+        "`/oldcw` `/exist`"
     ), inline=False)
-    e.add_field(name="🔔 Notifications", value=(
-        "`/notif_toggle` `/notif_status`"
-    ), inline=False)
-    e.add_field(name="💎 Diamonds", value=(
-        "`/gem_donate` `/gem_lb` `/gem_total`"
-    ), inline=False)
+    e.add_field(name="💰 Economy", value="`/rap` `/cheap`", inline=False)
+    e.add_field(name="🔐 Misc", value="`/checkperms` `/help`", inline=False)
     e.set_footer(text="PS99 ClanWar Bot  •  Pull → Save → Compare")
     await ctx.send(embed=e)
 
@@ -85,9 +76,5 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         print("❌ DISCORD_TOKEN fehlt in der .env Datei!")
         exit(1)
-
-    # Keep-alive für Render starten (läuft im Hintergrund-Thread)
     keep_alive()
-
-    # Bot starten
     bot.run(DISCORD_TOKEN)

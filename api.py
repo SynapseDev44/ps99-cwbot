@@ -78,6 +78,12 @@ async def get_clan_rank(session: aiohttp.ClientSession, name: str) -> int | None
 async def get_active_clan_battle(session: aiohttp.ClientSession) -> dict | None:
     return await _get(session, f"{API_BASE}/activeClanBattle")
 
+async def get_rap(session: aiohttp.ClientSession) -> list | None:
+    return await _get(session, f"{API_BASE}/rap")
+
+async def get_clans_leaderboard(session: aiohttp.ClientSession, page: int = 1) -> list | None:
+    return await _get(session, f"{API_BASE}/clans?page={page}&pageSize=50&sort=Points&sortOrder=desc")
+
 # ── data helpers ───────────────────────────────────────────────────────────────
 def total_points(clan: dict) -> int:
     battle = clan.get("Contribution", {}).get("Battle", [])
@@ -105,6 +111,16 @@ def member_diamonds(clan: dict) -> dict[int, float]:
         dia = m.get("DepositedDiamonds", 0) or 0
         if uid is not None:
             result[int(uid)] = float(dia)
+    return result
+
+def member_battle_points(clan: dict) -> dict[int, int]:
+    """Returns {UserID: Points} from battle contribution."""
+    result = {}
+    for m in clan.get("Contribution", {}).get("Battle", []):
+        uid = m.get("UserID")
+        pts = m.get("Points", 0)
+        if uid is not None:
+            result[int(uid)] = int(pts)
     return result
 
 def battle_sorted(clan: dict) -> list[dict]:
