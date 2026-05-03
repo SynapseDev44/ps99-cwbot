@@ -11,34 +11,43 @@ from config import MAX_SNAPSHOTS, GIST_ID, GITHUB_TOKEN
 DB_PATH = Path("data/db.json")
 
 _EMPTY = {
-    "guilds":    {},
-    "snapshots": {},
-    "ranks":     {},
-    "uid_cache": {},
+    "guilds":        {},
+    "snapshots":     {},
+    "ranks":         {},
+    "league_ranks":  {},
+    "uid_cache":     {},
 }
 
 _db: dict = {}
 
 # ── Migration: altes Format → neues Format ─────────────────────────
+_ALL_TYPES = ("clanrank", "diamonds", "hourlystats", "joinleave", "leagues")
+
 def _migrate_clan(cdata: dict) -> dict:
-    if "channels" in cdata:
-        return cdata
-    old_ch = cdata.get("channel_id", "")
-    old_n  = cdata.get("notifs", {})
-    return {
-        "channels": {
-            "clanrank":    old_ch if old_n.get("ranking",    True) else "",
-            "diamonds":    old_ch if old_n.get("diamond",    True) else "",
-            "hourlystats": old_ch if old_n.get("hourly",     True) else "",
-            "joinleave":   old_ch if old_n.get("join_leave", True) else "",
-        },
-        "disabled": {
-            "clanrank":    not old_n.get("ranking",    True),
-            "diamonds":    not old_n.get("diamond",    True),
-            "hourlystats": not old_n.get("hourly",     True),
-            "joinleave":   not old_n.get("join_leave", True),
-        },
-    }
+    if "channels" not in cdata:
+        old_ch = cdata.get("channel_id", "")
+        old_n  = cdata.get("notifs", {})
+        cdata = {
+            "channels": {
+                "clanrank":    old_ch if old_n.get("ranking",    True) else "",
+                "diamonds":    old_ch if old_n.get("diamond",    True) else "",
+                "hourlystats": old_ch if old_n.get("hourly",     True) else "",
+                "joinleave":   old_ch if old_n.get("join_leave", True) else "",
+                "leagues":     "",
+            },
+            "disabled": {
+                "clanrank":    not old_n.get("ranking",    True),
+                "diamonds":    not old_n.get("diamond",    True),
+                "hourlystats": not old_n.get("hourly",     True),
+                "joinleave":   not old_n.get("join_leave", True),
+                "leagues":     False,
+            },
+        }
+    else:
+        # Ensure new keys exist in old new-format entries
+        cdata.setdefault("channels", {}).setdefault("leagues", "")
+        cdata.setdefault("disabled", {}).setdefault("leagues", False)
+    return cdata
 
 # ── load / save ────────────────────────────────────────────────────
 def _load():
@@ -128,8 +137,8 @@ def _clan(guild_id: str, clan_name: str) -> dict:
     clans = _guild(guild_id)["clans"]
     if clan_up not in clans:
         clans[clan_up] = {
-            "channels": {"clanrank": "", "diamonds": "", "hourlystats": "", "joinleave": ""},
-            "disabled": {"clanrank": False, "diamonds": False, "hourlystats": False, "joinleave": False},
+            "channels": {t: "" for t in _ALL_TYPES},
+            "disabled": {t: False for t in _ALL_TYPES},
         }
     return clans[clan_up]
 
@@ -220,13 +229,21 @@ def hourly_diff(clan_name: str) -> int | None:
         return None
     return snaps[0]["points"] - snaps[1]["points"]
 
-# ── ranks ──────────────────────────────────────────────────────────
+# ── CW ranks ───────────────────────────────────────────────────────
 def save_rank(clan_name: str, rank: int):
     _g("ranks")[clan_name.upper()] = rank
     save()
 
 def last_rank(clan_name: str) -> int | None:
     return _g("ranks").get(clan_name.upper())
+
+# ── League ranks ────────────────────────────────────────────────────
+def save_league_rank(clan_name: str, rank: int):
+    _g("league_ranks")[clan_name.upper()] = rank
+    save()
+
+def last_league_rank(clan_name: str) -> int | None:
+    return _g("league_ranks").get(clan_name.upper())
 
 # ── name cache ─────────────────────────────────────────────────────
 def cache_name(uid: int, name: str):

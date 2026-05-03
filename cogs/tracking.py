@@ -1,8 +1,11 @@
 """
 cogs/tracking.py
-/set   clanrank | diamonds | hourlystats | joinleave
-/disable clanrank | diamonds | hourlystats | joinleave
+/set   clanrank | diamonds | hourlystats | joinleave | leagues
+/disable clanrank | diamonds | hourlystats | joinleave | leagues
 /checkperms
+
+Beim ersten /set für einen Clan werden ALLE 4 CW-Channels auf denselben
+Channel gesetzt. Spätere /set-Befehle ändern nur noch den jeweiligen Typ.
 """
 
 import discord
@@ -19,7 +22,7 @@ class TrackingCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # ── Helper: ersten Snapshot anlegen falls noch keiner da ──────────────────
+    # ── Helper: Snapshot anlegen falls noch keiner da ─────────────────────────
     @staticmethod
     async def _ensure_snapshot(s, clan_name: str):
         if db.latest_snapshot(clan_name):
@@ -28,151 +31,165 @@ class TrackingCog(commands.Cog):
         if not data:
             return False
         rank = await ps99.get_clan_rank(s, clan_name)
-        pts  = ps99.total_points(data)
-        ids  = ps99.member_ids(data)
-        dia  = ps99.deposited_diamonds(data)
-        md   = ps99.member_diamonds(data)
-        mb   = ps99.member_battle_points(data)
-        db.push_snapshot(clan_name, pts, rank, ids, dia, md, mb)
+        db.push_snapshot(
+            clan_name,
+            ps99.total_points(data),
+            rank,
+            ps99.member_ids(data),
+            ps99.deposited_diamonds(data),
+            ps99.member_diamonds(data),
+            ps99.member_battle_points(data),
+        )
         if rank:
             db.save_rank(clan_name, rank)
         return True
 
+    @staticmethod
+    def _is_first_track(guild_id: str, clan_name: str) -> bool:
+        entry = db.get_clan_entry(guild_id, clan_name)
+        if entry is None:
+            return True
+        return not any(v for v in entry.get("channels", {}).values())
+
     # ══════════════════════════════════════════════════════════════════════════
-    # /set  –  Command Group
+    # /set – Command Group
     # ══════════════════════════════════════════════════════════════════════════
     set_group = app_commands.Group(name="set", description="Configure tracking channels for a clan")
 
-    @set_group.command(name="clanrank", description="📊 Set the ClanRank notification channel")
-    @app_commands.describe(clan="Clan Name (e.g. ZYXE)", channel="Channel (default: current)")
-    async def set_clanrank(self, interaction: discord.Interaction,
-                           clan: str, channel: discord.TextChannel = None):
+    async def _set_channel(self, interaction: discord.Interaction,
+                            clan: str, channel: discord.TextChannel | None,
+                            notif_type: str):
         await interaction.response.defer()
         clan  = clan.strip().upper()
         ch_id = str(channel.id if channel else interaction.channel_id)
+        gid   = str(interaction.guild_id)
+
         async with aiohttp.ClientSession() as s:
             data = await ps99.get_clan(s, clan)
             if not data:
                 return await interaction.followup.send(f"❌ Clan **{clan}** not found in PS99!")
             await self._ensure_snapshot(s, clan)
-        db.set_clan_channel(str(interaction.guild_id), clan, "clanrank", ch_id)
-        e = discord.Embed(title=f"✅ ClanRank tracking set for **{clan}**", color=0x57F287)
-        e.description = f"Rank changes will be posted in <#{ch_id}>"
-        e.add_field(name="📊 Points",  value=fmt(ps99.total_points(data)), inline=True)
-        e.add_field(name="👥 Members", value=str(len(data.get("Members", []))), inline=True)
+
+        # First time tracking → set ALL 4 CW channels at once
+        if self._is_first_track(gid, clan) and notif_type != "leagues":
+            for t in ("clanrank", "diamonds", "hourlystats", "joinleave"):
+                db.set_clan_channel(gid, clan, t, ch_id)
+            desc = (
+                f"All notifications for **{clan}** will be posted in <#{ch_id}>\n"
+                f"Use specific `/set` subcommands to route types to different channels."
+            )
+        else:
+            db.set_clan_channel(gid, clan, notif_type, ch_id)
+            desc = f"**{notif_type}** notifications for **{clan}** → <#{ch_id}>"
+
+        labels = {
+            "clanrank":    "📊 ClanRank",
+            "diamonds":    "💎 Diamonds",
+            "hourlystats": "⏰ Hourly Stats",
+            "joinleave":   "👤 Join/Leave",
+            "leagues":     "🏆 Leagues",
+        }
+        e = discord.Embed(
+            title=f"✅ {labels.get(notif_type, notif_type)} set for **{clan}**",
+            description=desc,
+            color=0x57F287,
+        )
+        e.add_field(name="⭐ Battle Points", value=fmt(ps99.total_points(data)),        inline=True)
+        e.add_field(name="👥 Members",
+                    value=f"{len(data.get('Members',[]))}/{data.get('MemberCapacity',75)}",
+                    inline=True)
+        e.add_field(name="💎 Diamonds",     value=fmt(ps99.deposited_diamonds(data)), inline=True)
         await interaction.followup.send(embed=e)
+
+    @set_group.command(name="clanrank", description="📊 Set the ClanRank notification channel")
+    @app_commands.describe(clan="Clan Name (e.g. ZYXE)", channel="Channel (default: current channel)")
+    async def set_clanrank(self, interaction: discord.Interaction,
+                           clan: str, channel: discord.TextChannel = None):
+        await self._set_channel(interaction, clan, channel, "clanrank")
 
     @set_group.command(name="diamonds", description="💎 Set the Diamond notification channel")
-    @app_commands.describe(clan="Clan Name", channel="Channel (default: current)")
+    @app_commands.describe(clan="Clan Name", channel="Channel (default: current channel)")
     async def set_diamonds(self, interaction: discord.Interaction,
                            clan: str, channel: discord.TextChannel = None):
-        await interaction.response.defer()
-        clan  = clan.strip().upper()
-        ch_id = str(channel.id if channel else interaction.channel_id)
-        async with aiohttp.ClientSession() as s:
-            data = await ps99.get_clan(s, clan)
-            if not data:
-                return await interaction.followup.send(f"❌ Clan **{clan}** not found!")
-            await self._ensure_snapshot(s, clan)
-        db.set_clan_channel(str(interaction.guild_id), clan, "diamonds", ch_id)
-        e = discord.Embed(title=f"✅ Diamonds tracking set for **{clan}**", color=0x57F287)
-        e.description = f"Diamond donations will be posted in <#{ch_id}>"
-        e.add_field(name="💎 Clan Diamonds", value=fmt(ps99.deposited_diamonds(data)), inline=True)
-        await interaction.followup.send(embed=e)
+        await self._set_channel(interaction, clan, channel, "diamonds")
 
     @set_group.command(name="hourlystats", description="⏰ Set the Hourly Stats channel")
-    @app_commands.describe(clan="Clan Name", channel="Channel (default: current)")
+    @app_commands.describe(clan="Clan Name", channel="Channel (default: current channel)")
     async def set_hourlystats(self, interaction: discord.Interaction,
                                clan: str, channel: discord.TextChannel = None):
-        await interaction.response.defer()
-        clan  = clan.strip().upper()
-        ch_id = str(channel.id if channel else interaction.channel_id)
-        async with aiohttp.ClientSession() as s:
-            data = await ps99.get_clan(s, clan)
-            if not data:
-                return await interaction.followup.send(f"❌ Clan **{clan}** not found!")
-            await self._ensure_snapshot(s, clan)
-        db.set_clan_channel(str(interaction.guild_id), clan, "hourlystats", ch_id)
-        e = discord.Embed(title=f"✅ Hourly Stats set for **{clan}**", color=0x57F287)
-        e.description = f"Hourly updates will be posted in <#{ch_id}>"
-        await interaction.followup.send(embed=e)
+        await self._set_channel(interaction, clan, channel, "hourlystats")
 
     @set_group.command(name="joinleave", description="👤 Set the Join/Leave notification channel")
-    @app_commands.describe(clan="Clan Name", channel="Channel (default: current)")
+    @app_commands.describe(clan="Clan Name", channel="Channel (default: current channel)")
     async def set_joinleave(self, interaction: discord.Interaction,
                              clan: str, channel: discord.TextChannel = None):
-        await interaction.response.defer()
-        clan  = clan.strip().upper()
-        ch_id = str(channel.id if channel else interaction.channel_id)
-        async with aiohttp.ClientSession() as s:
-            data = await ps99.get_clan(s, clan)
-            if not data:
-                return await interaction.followup.send(f"❌ Clan **{clan}** not found!")
-            await self._ensure_snapshot(s, clan)
-        db.set_clan_channel(str(interaction.guild_id), clan, "joinleave", ch_id)
-        e = discord.Embed(title=f"✅ Join/Leave set for **{clan}**", color=0x57F287)
-        e.description = f"Join/Leave events will be posted in <#{ch_id}>"
-        e.add_field(name="👥 Members",
-                    value=f"{len(data.get('Members', []))}/{data.get('MemberCapacity', 75)}",
-                    inline=True)
-        await interaction.followup.send(embed=e)
+        await self._set_channel(interaction, clan, channel, "joinleave")
+
+    @set_group.command(name="leagues", description="🏆 Track a clan's Leagues position")
+    @app_commands.describe(clan="Clan Name", channel="Channel (default: current channel)")
+    async def set_leagues(self, interaction: discord.Interaction,
+                           clan: str, channel: discord.TextChannel = None):
+        await self._set_channel(interaction, clan, channel, "leagues")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # /disable  –  Command Group
+    # /disable – Command Group
     # ══════════════════════════════════════════════════════════════════════════
-    disable_group = app_commands.Group(name="disable", description="Disable specific notifications for a clan")
+    disable_group = app_commands.Group(name="disable", description="Disable notifications for a clan")
 
-    @disable_group.command(name="clanrank", description="📊 Disable ClanRank notifications for one clan")
-    @app_commands.describe(clan="Clan Name")
-    async def disable_clanrank(self, interaction: discord.Interaction, clan: str):
+    async def _disable(self, interaction: discord.Interaction, clan: str, notif_type: str):
         await interaction.response.defer()
         clan = clan.strip().upper()
-        ok   = db.disable_notif(str(interaction.guild_id), clan, "clanrank")
+        ok   = db.disable_notif(str(interaction.guild_id), clan, notif_type)
         if not ok:
-            return await interaction.followup.send(f"❌ **{clan}** is not tracked. Use `/set clanrank` first.")
-        await interaction.followup.send(f"❌ **ClanRank** notifications for **{clan}** disabled.")
+            return await interaction.followup.send(
+                f"❌ **{clan}** is not tracked. Use `/set {notif_type}` first."
+            )
+        labels = {
+            "clanrank":    "📊 ClanRank",
+            "diamonds":    "💎 Diamonds",
+            "hourlystats": "⏰ Hourly Stats",
+            "joinleave":   "👤 Join/Leave",
+            "leagues":     "🏆 Leagues",
+        }
+        await interaction.followup.send(
+            f"❌ **{labels.get(notif_type, notif_type)}** notifications for **{clan}** disabled."
+        )
 
-    @disable_group.command(name="diamonds", description="💎 Disable Diamond notifications for one clan")
+    @disable_group.command(name="clanrank", description="📊 Disable ClanRank for one clan")
     @app_commands.describe(clan="Clan Name")
-    async def disable_diamonds(self, interaction: discord.Interaction, clan: str):
-        await interaction.response.defer()
-        clan = clan.strip().upper()
-        ok   = db.disable_notif(str(interaction.guild_id), clan, "diamonds")
-        if not ok:
-            return await interaction.followup.send(f"❌ **{clan}** is not tracked. Use `/set diamonds` first.")
-        await interaction.followup.send(f"❌ **Diamonds** notifications for **{clan}** disabled.")
+    async def disable_clanrank(self, i: discord.Interaction, clan: str):
+        await self._disable(i, clan, "clanrank")
 
-    @disable_group.command(name="hourlystats", description="⏰ Disable Hourly Contribution for one clan")
+    @disable_group.command(name="diamonds", description="💎 Disable Diamonds for one clan")
     @app_commands.describe(clan="Clan Name")
-    async def disable_hourlystats(self, interaction: discord.Interaction, clan: str):
-        await interaction.response.defer()
-        clan = clan.strip().upper()
-        ok   = db.disable_notif(str(interaction.guild_id), clan, "hourlystats")
-        if not ok:
-            return await interaction.followup.send(f"❌ **{clan}** is not tracked. Use `/set hourlystats` first.")
-        await interaction.followup.send(f"❌ **Hourly Stats** for **{clan}** disabled.")
+    async def disable_diamonds(self, i: discord.Interaction, clan: str):
+        await self._disable(i, clan, "diamonds")
+
+    @disable_group.command(name="hourlystats", description="⏰ Disable Hourly Contribution")
+    @app_commands.describe(clan="Clan Name")
+    async def disable_hourlystats(self, i: discord.Interaction, clan: str):
+        await self._disable(i, clan, "hourlystats")
 
     @disable_group.command(name="joinleave", description="👤 Disable Join/Leave for one clan")
     @app_commands.describe(clan="Clan Name")
-    async def disable_joinleave(self, interaction: discord.Interaction, clan: str):
-        await interaction.response.defer()
-        clan = clan.strip().upper()
-        ok   = db.disable_notif(str(interaction.guild_id), clan, "joinleave")
-        if not ok:
-            return await interaction.followup.send(f"❌ **{clan}** is not tracked. Use `/set joinleave` first.")
-        await interaction.followup.send(f"❌ **Join/Leave** for **{clan}** disabled.")
+    async def disable_joinleave(self, i: discord.Interaction, clan: str):
+        await self._disable(i, clan, "joinleave")
+
+    @disable_group.command(name="leagues", description="🏆 Disable Leagues tracking for one clan")
+    @app_commands.describe(clan="Clan Name")
+    async def disable_leagues(self, i: discord.Interaction, clan: str):
+        await self._disable(i, clan, "leagues")
 
     # ══════════════════════════════════════════════════════════════════════════
     # /checkperms
     # ══════════════════════════════════════════════════════════════════════════
-    @app_commands.command(name="checkperms", description="🔐 Checks the permissions of the bot in a channel")
+    @app_commands.command(name="checkperms", description="🔐 Checks the permissions of the bot")
     @app_commands.describe(channel="Channel to check (default: current)")
     async def checkperms(self, interaction: discord.Interaction,
                          channel: discord.TextChannel = None):
         await interaction.response.defer()
-        ch   = channel or interaction.channel
-        me   = interaction.guild.me
-        perms = ch.permissions_for(me)
+        ch    = channel or interaction.channel
+        perms = ch.permissions_for(interaction.guild.me)
         checks = [
             ("Send Messages",        perms.send_messages),
             ("Embed Links",          perms.embed_links),
@@ -193,5 +210,4 @@ class TrackingCog(commands.Cog):
 
 
 async def setup(bot):
-    cog = TrackingCog(bot)
-    await bot.add_cog(cog)
+    await bot.add_cog(TrackingCog(bot))

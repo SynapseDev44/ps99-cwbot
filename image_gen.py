@@ -61,7 +61,7 @@ async def get_icon(asset: str, size: int) -> Image.Image | None:
 # ══════════════════════════════════════════════════════════════════
 async def generate_clan_board(clan_data: dict, clan_name: str,
                                rank, hourly_pts: int,
-                               diff) -> io.BytesIO:
+                               diff, uid_map: dict = None) -> io.BytesIO:
 
     members  = clan_data.get("Members", [])
     capacity = clan_data.get("MemberCapacity", 75)
@@ -157,8 +157,12 @@ async def generate_clan_board(clan_data: dict, clan_name: str,
         cx   = col * COL_W
         y    = HDR_H + row * ROW_H + 2
         pts  = m.get("Points", 0)
-        uid  = str(m.get("UserID", "?"))
+        uid  = m.get("UserID", 0)
         num  = idx + 1
+
+        # Roblox username aus uid_map, sonst UID als Fallback
+        _uid_map = uid_map or {}
+        display  = _uid_map.get(int(uid), _uid_map.get(str(uid), str(uid)))
 
         # Zeilenhintergrund abwechselnd
         if row % 2 == 0:
@@ -170,8 +174,8 @@ async def generate_clan_board(clan_data: dict, clan_name: str,
         draw.text((cx+8, y+4), f"{num:02d}",
                   font=F(12, num<=3), fill=ncol)
 
-        # Username (gekürzt auf 14 Zeichen)
-        name_disp = uid[:14] + ("…" if len(uid)>14 else "")
+        # Roblox Username (gekürzt auf 14 Zeichen)
+        name_disp = display[:14] + ("…" if len(display) > 14 else "")
         draw.text((cx+36, y+4), name_disp, font=F(12), fill=WHITE)
 
         # Fortschrittsbalken (wie im Screenshot – volle Breite)

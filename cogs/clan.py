@@ -20,6 +20,26 @@ from image_gen import generate_clan_board
 from fmt import fmt
 
 
+async def _bulk_names(s, clan_data: dict) -> dict:
+    """Fetch Roblox usernames for all battle members, using db cache."""
+    uids = [m.get("UserID") for m in clan_data.get("Contribution", {}).get("Battle", [])
+            if m.get("UserID") is not None]
+    uid_map: dict[int, str] = {}
+    missing = []
+    for uid in uids:
+        cached = db.cached_name(uid)
+        if cached:
+            uid_map[int(uid)] = cached
+        else:
+            missing.append(uid)
+    if missing:
+        fetched = await ps99.roblox_names_bulk(s, missing)
+        for uid, name in fetched.items():
+            db.cache_name(uid, name)
+            uid_map[int(uid)] = name
+    return uid_map
+
+
 class ClanCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -36,11 +56,13 @@ class ClanCog(commands.Cog):
                 data, rank = await asyncio.gather(
                     ps99.get_clan(s, name), ps99.get_clan_rank(s, name)
                 )
-            if not data:
-                return await msg.edit(content=f"❌ **{name}** nicht gefunden!")
+                if not data:
+                    return await msg.edit(content=f"❌ **{name}** nicht gefunden!")
+                uid_map = await _bulk_names(s, data)
             buf = await generate_clan_board(data, name, rank,
                                             ps99.hourly_points(data),
-                                            db.hourly_diff(name))
+                                            db.hourly_diff(name),
+                                            uid_map=uid_map)
             await msg.delete()
             await ctx.send(file=discord.File(buf, filename=f"{name}_board.png"))
         except Exception as e:

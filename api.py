@@ -84,6 +84,24 @@ async def get_rap(session: aiohttp.ClientSession) -> list | None:
 async def get_clans_leaderboard(session: aiohttp.ClientSession, page: int = 1) -> list | None:
     return await _get(session, f"{API_BASE}/clans?page={page}&pageSize=50&sort=Points&sortOrder=desc")
 
+async def get_clan_league_rank(session: aiohttp.ClientSession, clan_name: str) -> int | None:
+    """
+    Tries to find the clan's league/trophy rank.
+    First checks clan data for Trophy/League fields,
+    then scans the Points leaderboard as fallback.
+    """
+    # Try the dedicated leaderboard first (Trophies/League season ranking)
+    lb = await _get(session, f"{API_BASE}/leaderboard/Clans")
+    if lb:
+        name_up = clan_name.upper()
+        for i, entry in enumerate(lb):
+            n = (entry.get("Name") or entry.get("ClanName") or "").upper()
+            if n == name_up:
+                return i + 1
+
+    # Fallback: Points leaderboard (same as global CW rank)
+    return await get_clan_rank(session, clan_name)
+
 # ── data helpers ───────────────────────────────────────────────────────────────
 def total_points(clan: dict) -> int:
     battle = clan.get("Contribution", {}).get("Battle", [])
