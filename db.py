@@ -162,15 +162,17 @@ def get_notif(guild_id: str, clan_name: str, key: str) -> bool:
 
 # ── snapshots ──────────────────────────────────────────────────────
 
-def push_snapshot(clan_name: str, points: int, rank, members: list, diamonds: float):
+def push_snapshot(clan_name: str, points: int, rank, members: list, diamonds: float,
+                  member_diamonds: dict = None):
     key = clan_name.upper()
     snaps = _g("snapshots").setdefault(key, [])
     snaps.insert(0, {
-        "ts":       int(time.time()),
-        "points":   points,
-        "rank":     rank,
-        "members":  members,
-        "diamonds": diamonds,
+        "ts":              int(time.time()),
+        "points":          points,
+        "rank":            rank,
+        "members":         members,
+        "diamonds":        diamonds,
+        "member_diamonds": {str(k): v for k, v in (member_diamonds or {}).items()},
     })
     _g("snapshots")[key] = snaps[:MAX_SNAPSHOTS]
     save()

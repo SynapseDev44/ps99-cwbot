@@ -398,20 +398,41 @@ async def generate_player_event(roblox_user: str, member_count: int,
 #     1. Shudin617 (Chubbylals) ⭐ 6.66k
 #     ...10 Einträge
 # ══════════════════════════════════════════════════════════════════
+def _rel_time(ts) -> str:
+    """Convert a unix timestamp to a human-readable relative string."""
+    if not ts:
+        return "?"
+    import time as _time
+    diff = int(ts) - int(_time.time())
+    if diff <= 0:
+        return "Beendet"
+    d = diff // 86400
+    h = (diff % 86400) // 3600
+    m = (diff % 3600) // 60
+    if d > 0:
+        return f"in {d}T {h}h" if h else f"in {d} Tag{'en' if d>1 else ''}"
+    if h > 0:
+        return f"in {h}h {m}m" if m else f"in {h} Stunde{'n' if h>1 else ''}"
+    return f"in {m} Min." if m > 0 else "gleich"
+
+
 async def generate_top_contributors(clan_data: dict, clan_name: str,
                                      rank, battle_name: str,
                                      uid_map: dict,
-                                     icon_str: str = "") -> io.BytesIO:
+                                     icon_str: str = "",
+                                     battle_info: dict = None) -> io.BytesIO:
     battle   = sorted(clan_data.get("Contribution",{}).get("Battle",[]),
                       key=lambda x: x.get("Points",0), reverse=True)
     top10    = battle[:10]
     total_pts = sum(m.get("Points",0) for m in battle)
     kick_cd  = clan_data.get("LastKickTimestamp")
-    mc       = len(clan_data.get("Members",[]))
     cap      = clan_data.get("MemberCapacity",75)
 
+    bi       = battle_info or {}
+    end_ts   = bi.get("EndTime") or bi.get("endTime") or bi.get("EndTimestamp")
+
     W  = 400
-    H  = 50 + 110 + len(top10)*42 + 50
+    H  = 50 + 130 + len(top10)*42 + 50
     img  = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
     for y in range(H):
@@ -435,7 +456,8 @@ async def generate_top_contributors(clan_data: dict, clan_name: str,
         ("Current Event:", battle_name),
         ("Current Rank:",  str(rank) if rank else "?"),
         ("Total Stars:",   f"{fmt(total_pts)} ⭐"),
-        ("Kick Cooldown:", f"<t:{kick_cd}:R>" if kick_cd else "in einem Tag"),
+        ("Kick Cooldown:", _rel_time(kick_cd) if kick_cd else "in einem Tag"),
+        ("End:",           _rel_time(end_ts)),
     ]
     for label, val in stats:
         draw.text((12, y), label, font=F(12), fill=GRAY)

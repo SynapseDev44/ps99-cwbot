@@ -71,12 +71,16 @@ class Monitor:
                 await channel.send(file=discord.File(buf, f"{cn}_left.png"))
 
         # ── DIAMONDS ──────────────────────────────────────────
-        if prev and channel and notifs.get("diamond",True):
-            prev_dia=prev.get("diamonds",0)
-            if dia_now>prev_dia:
-                delta=dia_now-prev_dia
-                buf=await generate_diamond_update(cn,"?",delta,delta,dia_now,icon)
-                await channel.send(file=discord.File(buf, f"{cn}_diamond.png"))
+        md_now = ps99.member_diamonds(data)
+        if prev and channel and notifs.get("diamond", True):
+            prev_md = prev.get("member_diamonds", {})
+            for uid, curr_dia in md_now.items():
+                prev_dia = float(prev_md.get(str(uid), 0))
+                if curr_dia > prev_dia:
+                    delta = curr_dia - prev_dia
+                    donor = await self._name(s, uid)
+                    buf = await generate_diamond_update(cn, donor, delta, curr_dia, dia_now, icon)
+                    await channel.send(file=discord.File(buf, f"{cn}_diamond.png"))
 
         # ── HOURLY ────────────────────────────────────────────
         now=time.time()
@@ -87,7 +91,7 @@ class Monitor:
                 buf=await generate_clan_board(data,cn,rank_now,hrly_now,diff)
                 await channel.send(file=discord.File(buf, f"{cn}_hourly.png"))
 
-        db.push_snapshot(cn,pts_now,rank_now,ids_now,dia_now)
+        db.push_snapshot(cn, pts_now, rank_now, ids_now, dia_now, md_now)
         if rank_now: db.save_rank(cn,rank_now)
 
     async def _name(self,s,uid):

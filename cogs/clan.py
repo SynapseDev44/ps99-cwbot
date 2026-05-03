@@ -70,7 +70,8 @@ class ClanCog(commands.Cog):
                         for m in ps99.battle_sorted(data)[:10]}
             bname = (battle_info or {}).get("configName", "ClanBattle")
             buf = await generate_top_contributors(data, name, rank, bname, full_map,
-                                                   data.get("Icon",""))
+                                                   data.get("Icon",""),
+                                                   battle_info=battle_info)
             await interaction.followup.send(file=discord.File(buf, filename=f"{name}_contributors.png"))
         except Exception as e:
             await interaction.followup.send(f"❌ Fehler: {e}")

@@ -97,6 +97,16 @@ def deposited_diamonds(clan: dict) -> float:
 def member_ids(clan: dict) -> list[int]:
     return [m["UserID"] for m in clan.get("Members", []) if "UserID" in m]
 
+def member_diamonds(clan: dict) -> dict[int, float]:
+    """Returns {UserID: DepositedDiamonds} for all members."""
+    result = {}
+    for m in clan.get("Members", []):
+        uid = m.get("UserID")
+        dia = m.get("DepositedDiamonds", 0) or 0
+        if uid is not None:
+            result[int(uid)] = float(dia)
+    return result
+
 def battle_sorted(clan: dict) -> list[dict]:
     return sorted(
         clan.get("Contribution", {}).get("Battle", []),
