@@ -1,479 +1,481 @@
 """
-image_gen.py  –  Generiert Clan-Board Bilder wie CW-Ranking Bot
-Benutzt Pillow (PIL) + io.BytesIO (kein Speichern auf Disk!)
+image_gen.py  –  Pixel-perfekte Bilder wie CW-Ranking Bot Screenshots
 """
+import io, math, asyncio, aiohttp
+from PIL import Image, ImageDraw, ImageFont
 
-import io
-import math
-import asyncio
-import aiohttp
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+FONT_REG  = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+FONT_BOLD = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
 
-# ── Font Paths ─────────────────────────────────────────────────────
-FONT_REGULAR = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
-FONT_BOLD    = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+# ── Exakte Farben aus den Screenshots ─────────────────────────────
+BG          = (30, 31, 34)       # Discord-ähnliches Dunkelgrau
+BG2         = (37, 39, 45)       # etwas heller für Karten
+BLUE        = (88, 101, 242)     # Discord Blau
+GREEN       = (87, 242, 135)     # Active / Joined grün
+RED         = (237, 66, 69)      # Zero / Left rot
+GOLD        = (255, 215, 0)      # Rang / Punkte
+WHITE       = (255, 255, 255)
+GRAY        = (148, 155, 164)    # Sekundärtext
+DARKGRAY    = (79, 84, 92)       # Trennlinien
+BAR_COL     = (88, 101, 242)     # Balkenfarbe (blau-lila wie Screenshot)
+BAR_BG      = (64, 68, 75)       # Balken Hintergrund
 
-# ── Farben (exakt wie Screenshots) ────────────────────────────────
-BG_DARK      = (15, 17, 20)          # fast schwarz
-BG_CARD      = (25, 28, 35)          # dunkle Karte
-BG_HEADER    = (20, 22, 30)          # Header-Bereich
-ACCENT_BLUE  = (88, 101, 242)        # Discord Blau
-ACCENT_GREEN = (87, 242, 135)        # Grün für Active
-ACCENT_RED   = (237, 66, 69)         # Rot für Zero
-ACCENT_GOLD  = (255, 215, 0)         # Gold für Rank
-TEXT_WHITE   = (255, 255, 255)
-TEXT_GRAY    = (160, 165, 180)
-TEXT_DIM     = (100, 105, 120)
-BAR_GREEN    = (87, 242, 135)
-BAR_ORANGE   = (255, 165, 0)
-BAR_RED      = (237, 66, 69)
+def F(size, bold=False):
+    return ImageFont.truetype(FONT_BOLD if bold else FONT_REG, size)
 
-def _font(size, bold=False):
-    path = FONT_BOLD if bold else FONT_REGULAR
-    return ImageFont.truetype(path, size)
-
-def _fmt(n) -> str:
+def fmt(n):
     try: n = float(n)
     except: return "0"
-    if n >= 1_000_000_000: return f"{n/1_000_000_000:.2f}b"
-    if n >= 1_000_000:     return f"{n/1_000_000:.2f}m"
-    if n >= 1_000:         return f"{n/1_000:.2f}k"
+    if n >= 1e9:  return f"{n/1e9:.2f}b"
+    if n >= 1e6:  return f"{n/1e6:.2f}m"
+    if n >= 1e3:  return f"{n/1e3:.2f}k"
     return str(int(n))
 
-def _bar_color(pts, max_pts):
-    if max_pts == 0: return BAR_RED
-    ratio = pts / max_pts
-    if ratio > 0.6:  return BAR_GREEN
-    if ratio > 0.2:  return BAR_ORANGE
-    return BAR_RED
+def rrect(draw, xy, r, fill, outline=None, ow=1):
+    draw.rounded_rectangle(xy, radius=r, fill=fill, outline=outline, width=ow)
 
-def _rounded_rect(draw, xy, radius, fill, outline=None, outline_width=1):
-    x1, y1, x2, y2 = xy
-    draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill,
-                            outline=outline, width=outline_width)
-
-async def fetch_clan_icon(icon_asset: str) -> Image.Image | None:
-    """Lädt das Clan-Icon von der PS99 API."""
-    if not icon_asset:
-        return None
-    asset_id = icon_asset.replace("rbxassetid://", "")
-    url = f"https://ps99.biggamesapi.io/image/{asset_id}"
+async def get_icon(asset: str, size: int) -> Image.Image | None:
+    if not asset: return None
+    aid = asset.replace("rbxassetid://", "")
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            async with s.get(f"https://ps99.biggamesapi.io/image/{aid}",
+                             timeout=aiohttp.ClientTimeout(total=8)) as r:
                 if r.status == 200:
                     data = await r.read()
-                    img = Image.open(io.BytesIO(data)).convert("RGBA")
-                    return img
-    except Exception:
-        pass
+                    img  = Image.open(io.BytesIO(data)).convert("RGBA")
+                    img  = img.resize((size, size), Image.LANCZOS)
+                    mask = Image.new("L", (size, size), 0)
+                    ImageDraw.Draw(mask).ellipse([0,0,size,size], fill=255)
+                    out  = Image.new("RGBA", (size, size), (0,0,0,0))
+                    out.paste(img, mask=mask)
+                    return out
+    except: pass
     return None
 
-def make_circular(img: Image.Image, size: int) -> Image.Image:
-    """Macht ein Bild kreisförmig mit Rand."""
-    img = img.resize((size, size), Image.LANCZOS)
-    mask = Image.new("L", (size, size), 0)
-    d = ImageDraw.Draw(mask)
-    d.ellipse([0, 0, size, size], fill=255)
-    result = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    result.paste(img, (0, 0), mask)
-    return result
-
-# ─────────────────────────────────────────────────────────────────
-# HAUPT-FUNKTION: Clan Board (wie Screenshot 1)
-# ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# 1.  CLAN BOARD  (Screenshot 1)
+#     Header: [ZYXE] | Clan Rank #96 | Hourly Points 1.23k
+#             Players 74 🔵 | Active 25 🟢 | Zero 49 🔴
+#     Body: 3 Spalten mit Nr, Name, Balken, Punkte
+# ══════════════════════════════════════════════════════════════════
 async def generate_clan_board(clan_data: dict, clan_name: str,
-                               rank: int | None, hourly_pts: int,
-                               diff: int | None) -> io.BytesIO:
-    """
-    Generiert das große Clan-Board Bild.
-    Gibt io.BytesIO zurück – kein Speichern auf Disk!
-    """
-    # ── Daten aus clan_data lesen ──────────────────────────────
-    # HIER deine JSON-Felder anpassen falls nötig:
-    members_list = clan_data.get("Members", [])
-    capacity     = clan_data.get("MemberCapacity", 75)
-    clan_icon    = clan_data.get("Icon", "")          # z.B. "rbxassetid://123456"
+                               rank, hourly_pts: int,
+                               diff) -> io.BytesIO:
 
-    battle       = sorted(
-        clan_data.get("Contribution", {}).get("Battle", []),
-        key=lambda x: x.get("Points", 0), reverse=True
-    )
-    total_m  = len(members_list)
-    active   = sum(1 for m in battle if m.get("Points", 0) > 0)
+    members  = clan_data.get("Members", [])
+    capacity = clan_data.get("MemberCapacity", 75)
+    icon_str = clan_data.get("Icon", "")
+    battle   = sorted(clan_data.get("Contribution",{}).get("Battle",[]),
+                      key=lambda x: x.get("Points",0), reverse=True)
+    total_m  = len(members)
+    active   = sum(1 for m in battle if m.get("Points",0) > 0)
     zero_c   = total_m - active
-    diamonds = clan_data.get("DepositedDiamonds", 0) or 0
-    total_pts = sum(m.get("Points", 0) for m in battle)
-    max_pts   = battle[0].get("Points", 1) if battle else 1
+    max_pts  = battle[0].get("Points",1) if battle else 1
 
-    # ── Canvas Größe berechnen ─────────────────────────────────
-    ROW_H    = 28
+    # Canvas
     COLS     = 3
-    rows_per_col = math.ceil(len(battle) / COLS) if battle else 1
-    HEADER_H = 160
-    LIST_H   = rows_per_col * ROW_H + 20
-    W        = 1100
-    H        = HEADER_H + LIST_H + 30
-    H        = max(H, 500)
+    ROW_H    = 26
+    HDR_H    = 145
+    rows     = math.ceil(len(battle) / COLS) if battle else 1
+    W        = 1080
+    H        = HDR_H + rows * ROW_H + 24
+    H        = max(H, 400)
 
-    img  = Image.new("RGB", (W, H), BG_DARK)
+    img  = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # ── Hintergrund Gradient-ähnlich ──────────────────────────
-    for y in range(H):
-        alpha = int(8 * (1 - y/H))
-        draw.line([(0, y), (W, y)], fill=(20+alpha, 22+alpha, 35+alpha))
+    # ── Header Hintergrund ──────────────────────────────────
+    draw.rectangle([0, 0, W, HDR_H], fill=(28, 29, 33))
 
-    # ── Clan Icon ─────────────────────────────────────────────
-    ICON_SIZE = 80
-    ICON_X, ICON_Y = 20, 30
-    icon_img = await fetch_clan_icon(clan_icon)
-    if icon_img:
-        icon_circle = make_circular(icon_img, ICON_SIZE)
-        # Glow-Effekt
-        glow = Image.new("RGBA", (ICON_SIZE+20, ICON_SIZE+20), (0,0,0,0))
-        gd = ImageDraw.Draw(glow)
-        gd.ellipse([5,5,ICON_SIZE+15,ICON_SIZE+15], fill=(88,101,242,60))
-        img.paste(glow, (ICON_X-10, ICON_Y-10), glow)
-        img.paste(icon_circle, (ICON_X, ICON_Y), icon_circle)
+    # ── Clan Icon ───────────────────────────────────────────
+    ISIZ = 72
+    IX, IY = 16, 16
+    icon = await get_icon(icon_str, ISIZ)
+    if icon:
+        # Glühender Ring
+        ring = Image.new("RGBA", (ISIZ+8, ISIZ+8), (0,0,0,0))
+        ImageDraw.Draw(ring).ellipse([0,0,ISIZ+8,ISIZ+8], outline=(88,101,242,200), width=3)
+        img.paste(ring, (IX-4, IY-4), ring)
+        img.paste(icon, (IX, IY), icon)
     else:
-        # Fallback: Buchstabe im Kreis
-        _rounded_rect(draw, [ICON_X, ICON_Y, ICON_X+ICON_SIZE, ICON_Y+ICON_SIZE],
-                      radius=40, fill=ACCENT_BLUE)
-        f = _font(32, bold=True)
-        letter = clan_name[0].upper()
-        bbox = draw.textbbox((0,0), letter, font=f)
-        lw, lh = bbox[2]-bbox[0], bbox[3]-bbox[1]
-        draw.text((ICON_X + ICON_SIZE//2 - lw//2,
-                   ICON_Y + ICON_SIZE//2 - lh//2), letter, font=f, fill=TEXT_WHITE)
+        draw.ellipse([IX, IY, IX+ISIZ, IY+ISIZ], fill=BLUE)
+        draw.text((IX+ISIZ//2, IY+ISIZ//2), clan_name[0],
+                  font=F(28, True), fill=WHITE, anchor="mm")
 
-    # ── Clan Name ─────────────────────────────────────────────
-    NAME_X = ICON_X + ICON_SIZE + 18
-    draw.text((NAME_X, 35), f"[{clan_name}]", font=_font(32, bold=True),
-              fill=ACCENT_GOLD)
+    # ── Clan Name ────────────────────────────────────────────
+    NX = IX + ISIZ + 14
+    draw.text((NX, 18), f"[{clan_name}]", font=F(26, True), fill=WHITE)
 
-    # ── Header Boxen: Rank | Hourly Points ────────────────────
-    boxes = [
-        ("Clan Rank",     f"#{rank}" if rank else "?",        ACCENT_BLUE),
-        ("Hourly Points", _fmt(hourly_pts),                   (100, 200, 100)),
-    ]
-    bx = NAME_X
-    for label, value, color in boxes:
-        bw, bh = 160, 48
-        _rounded_rect(draw, [bx, 75, bx+bw, 75+bh], radius=8,
-                      fill=(30, 33, 45), outline=color, outline_width=2)
-        draw.text((bx+10, 79), label, font=_font(11), fill=TEXT_GRAY)
-        draw.text((bx+10, 93), value, font=_font(18, bold=True), fill=TEXT_WHITE)
-        bx += bw + 12
+    # ── Rank Box ─────────────────────────────────────────────
+    BX, BY = NX, 52
+    rrect(draw, [BX, BY, BX+120, BY+38], r=6, fill=(40,42,50))
+    draw.text((BX+8, BY+4),  "Clan Rank", font=F(10), fill=GRAY)
+    draw.text((BX+8, BY+16), f"#{rank}" if rank else "?",
+              font=F(16, True), fill=WHITE)
 
-    # ── Stats: Players | Active | Zero ────────────────────────
+    # ── Hourly Points Box ────────────────────────────────────
+    BX2 = BX + 130
+    rrect(draw, [BX2, BY, BX2+140, BY+38], r=6, fill=(40,42,50))
+    draw.text((BX2+8, BY+4),  "Hourly Points", font=F(10), fill=GRAY)
+    draw.text((BX2+8, BY+16), fmt(hourly_pts),  font=F(16, True), fill=WHITE)
+
+    # ── Players / Active / Zero Boxen rechts ─────────────────
+    STAT_W = 90
     stats = [
-        ("Players", str(total_m), TEXT_WHITE,   ACCENT_BLUE),
-        ("Active",  str(active),  ACCENT_GREEN, ACCENT_GREEN),
-        ("Zero",    str(zero_c),  ACCENT_RED,   ACCENT_RED),
+        ("Players", str(total_m), WHITE,  (59, 130, 246)),
+        ("Active",  str(active),  GREEN,  (34, 197, 94)),
+        ("Zero",    str(zero_c),  RED,    (239, 68, 68)),
     ]
-    sx = W - 420
-    for label, value, vcol, box_col in stats:
-        sw = 110
-        _rounded_rect(draw, [sx, 30, sx+sw, 100], radius=8,
-                      fill=(25, 28, 38), outline=box_col, outline_width=2)
-        draw.text((sx + sw//2, 42), value,
-                  font=_font(28, bold=True), fill=vcol,
-                  anchor="mt")
-        draw.text((sx + sw//2, 76), label,
-                  font=_font(13), fill=TEXT_GRAY,
-                  anchor="mt")
-        sx += sw + 15
+    sx = W - (STAT_W + 12) * 3 - 10
+    for label, val, vcol, bcol in stats:
+        rrect(draw, [sx, 14, sx+STAT_W, 14+80], r=8,
+              fill=(38, 40, 48), outline=bcol, ow=2)
+        draw.text((sx+STAT_W//2, 28), val,
+                  font=F(26, True), fill=vcol, anchor="mt")
+        draw.text((sx+STAT_W//2, 62), label,
+                  font=F(11), fill=GRAY, anchor="mt")
+        sx += STAT_W + 12
 
-    # ── Diamonds + Diff ───────────────────────────────────────
-    dy = 110
-    draw.text((NAME_X, dy), f"💎 {_fmt(diamonds)}", font=_font(14), fill=(150, 180, 255))
+    # ── Diff ─────────────────────────────────────────────────
     if diff is not None:
         sign = "+" if diff >= 0 else ""
-        col  = ACCENT_GREEN if diff >= 0 else ACCENT_RED
-        draw.text((NAME_X + 180, dy), f"Δ {sign}{_fmt(diff)}/h",
-                  font=_font(14, bold=True), fill=col)
+        col  = GREEN if diff >= 0 else RED
+        draw.text((NX, 100), f"Δ {sign}{fmt(diff)}/h",
+                  font=F(13, True), fill=col)
 
-    # ── Trennlinie ────────────────────────────────────────────
-    draw.line([(0, HEADER_H - 10), (W, HEADER_H - 10)],
-              fill=(40, 44, 60), width=1)
+    # ── Trennlinie ───────────────────────────────────────────
+    draw.line([(0, HDR_H-1), (W, HDR_H-1)], fill=(50, 52, 60), width=1)
 
-    # ── Mitgliederliste in 3 Spalten ──────────────────────────
+    # ── Mitgliederliste 3 Spalten ────────────────────────────
     COL_W  = W // COLS
-    BAR_MAX_W = COL_W - 120
+    BAR_W  = COL_W - 160   # Platz für Name + Punkte
 
     for idx, m in enumerate(battle):
-        col   = idx % COLS
-        row   = idx // COLS
-        x     = col * COL_W + 12
-        y     = HEADER_H + row * ROW_H + 8
-        pts   = m.get("Points", 0)
-        uid   = str(m.get("UserID", "?"))
-        num   = idx + 1
+        col  = idx % COLS
+        row  = idx // COLS
+        cx   = col * COL_W
+        y    = HDR_H + row * ROW_H + 2
+        pts  = m.get("Points", 0)
+        uid  = str(m.get("UserID", "?"))
+        num  = idx + 1
 
         # Zeilenhintergrund abwechselnd
         if row % 2 == 0:
-            draw.rectangle([col*COL_W, y-3, (col+1)*COL_W-4, y+ROW_H-5],
-                           fill=(20, 23, 32))
+            draw.rectangle([cx+2, y, cx+COL_W-2, y+ROW_H-2],
+                           fill=(33, 34, 40))
 
-        # Nummer
-        num_col = ACCENT_GOLD if num <= 3 else TEXT_GRAY
-        draw.text((x, y), f"{num:02d}", font=_font(12, bold=num<=3), fill=num_col)
+        # Nummer  01–74
+        ncol = GOLD if num <= 3 else GRAY
+        draw.text((cx+8, y+4), f"{num:02d}",
+                  font=F(12, num<=3), fill=ncol)
 
-        # Dot
-        dot_col = ACCENT_GREEN if pts > 0 else ACCENT_RED
-        draw.ellipse([x+30, y+5, x+40, y+15], fill=dot_col)
+        # Username (gekürzt auf 14 Zeichen)
+        name_disp = uid[:14] + ("…" if len(uid)>14 else "")
+        draw.text((cx+36, y+4), name_disp, font=F(12), fill=WHITE)
 
-        # Username (gekürzt)
-        uid_display = uid[:12] + "…" if len(uid) > 12 else uid
-        draw.text((x+46, y), uid_display, font=_font(12), fill=TEXT_WHITE)
-
-        # Progress Bar
-        bar_w = max(0, int((pts / max_pts) * BAR_MAX_W)) if max_pts > 0 else 0
-        bar_x = x + 46
-        bar_y = y + ROW_H - 10
-        draw.rounded_rectangle([bar_x, bar_y, bar_x + BAR_MAX_W, bar_y+4],
-                                radius=2, fill=(40, 44, 55))
-        if bar_w > 0:
-            draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y+4],
-                                    radius=2, fill=_bar_color(pts, max_pts))
+        # Fortschrittsbalken (wie im Screenshot – volle Breite)
+        bar_x = cx + 36
+        bar_y = y + ROW_H - 8
+        bw    = int((pts / max_pts) * BAR_W) if max_pts > 0 else 0
+        bw    = max(0, min(bw, BAR_W))
+        draw.rounded_rectangle([bar_x, bar_y, bar_x+BAR_W, bar_y+4],
+                                radius=2, fill=BAR_BG)
+        if bw > 0:
+            draw.rounded_rectangle([bar_x, bar_y, bar_x+bw, bar_y+4],
+                                    radius=2, fill=BAR_COL)
 
         # Punkte rechts
-        pts_str = _fmt(pts)
-        pts_x   = (col+1)*COL_W - 8
-        draw.text((pts_x, y), pts_str, font=_font(12, bold=True),
-                  fill=TEXT_WHITE if pts > 0 else TEXT_DIM, anchor="ra")
+        draw.text((cx+COL_W-8, y+4), fmt(pts),
+                  font=F(12, True), fill=WHITE if pts>0 else GRAY,
+                  anchor="ra")
 
-    # ── Footer ────────────────────────────────────────────────
-    draw.text((W//2, H-12), "PS99 ClanWar Bot",
-              font=_font(11), fill=TEXT_DIM, anchor="mt")
-
-    # ── Als BytesIO zurückgeben (kein Speichern!) ─────────────
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, "PNG")
     buf.seek(0)
     return buf
 
 
-# ─────────────────────────────────────────────────────────────────
-# Diamond Update Bild (wie Screenshot 2)
-# ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# 2.  DIAMOND UPDATE  (Screenshot 2)
+#     Titel: "Diamond Update • zyxe"
+#     kxezy44 (kxezy44)
+#     donated 50.00m 💎
+#     (Total: 50.00m)
+#     Clan Diamonds: 11.64b
+#     30.04.2026 18:50
+# ══════════════════════════════════════════════════════════════════
 async def generate_diamond_update(clan_name: str, roblox_user: str,
                                    amount: float, user_total: float,
                                    clan_diamonds: float,
-                                   clan_icon: str = "") -> io.BytesIO:
-    W, H = 500, 220
-    img  = Image.new("RGB", (W, H), BG_CARD)
+                                   icon_str: str = "") -> io.BytesIO:
+    W, H = 480, 210
+    img  = Image.new("RGB", (W, H), BG2)
     draw = ImageDraw.Draw(img)
 
-    # Hintergrund
+    # Dezenter Hintergrund-Gradient
     for y in range(H):
-        v = int(5 * y/H)
-        draw.line([(0,y),(W,y)], fill=(25+v, 28+v, 38+v))
+        v = int(6*y/H)
+        draw.line([(0,y),(W,y)], fill=(37+v, 39+v, 46+v))
 
-    # Blauer linker Balken
-    draw.rectangle([0, 0, 4, H], fill=ACCENT_BLUE)
-
-    # Icon rechts
-    ICON_SIZE = 80
-    icon_img = await fetch_clan_icon(clan_icon)
-    if icon_img:
-        ic = make_circular(icon_img, ICON_SIZE)
-        img.paste(ic, (W - ICON_SIZE - 20, 20), ic)
+    # Icon oben rechts (wie im Screenshot – großes Clan-Icon)
+    icon = await get_icon(icon_str, 90)
+    if icon:
+        img.paste(icon, (W-105, 10), icon)
     else:
-        _rounded_rect(draw, [W-100, 20, W-20, 100], radius=40, fill=ACCENT_BLUE)
-        draw.text((W-60, 60), "💎", font=_font(30), fill=TEXT_WHITE, anchor="mm")
+        # Fallback: blaues Diamond-Icon
+        draw.ellipse([W-105, 10, W-15, 100], fill=(50, 60, 120))
+        draw.text((W-60, 55), "💎", font=F(30), fill=BLUE, anchor="mm")
 
-    # Titel
-    draw.text((18, 15), "💎 Diamond Update", font=_font(18, bold=True), fill=TEXT_WHITE)
-    draw.text((18, 38), f"• {clan_name.lower()}", font=_font(14), fill=TEXT_GRAY)
+    # Titel  "Diamond Update • zyxe"
+    draw.text((14, 12), "Diamond Update •", font=F(16, True), fill=WHITE)
+    draw.text((14, 32), clan_name.lower(), font=F(16, True), fill=WHITE)
 
-    # Content
-    y = 70
-    draw.text((18, y), f"{roblox_user} ({roblox_user})",
-              font=_font(15, bold=True), fill=TEXT_WHITE)
-    y += 25
-    draw.text((18, y), "donated ", font=_font(14), fill=TEXT_GRAY)
-    draw.text((18 + 70, y), f"{_fmt(amount)} 💎", font=_font(14, bold=True), fill=ACCENT_GOLD)
+    # Content (genau wie Screenshot)
+    y = 65
+    # "kxezy44 (kxezy44)"
+    draw.text((14, y), f"{roblox_user} ({roblox_user})",
+              font=F(14, True), fill=WHITE)
     y += 22
-    draw.text((18, y), f"(Total: {_fmt(user_total)})", font=_font(13), fill=TEXT_GRAY)
-    y += 22
-    draw.text((18, y), "Clan Diamonds: ", font=_font(13), fill=TEXT_GRAY)
-    draw.text((18 + 118, y), f"{_fmt(clan_diamonds)}", font=_font(13, bold=True), fill=(150, 200, 255))
+    # "donated 50.00m 💎"
+    draw.text((14, y), f"donated {fmt(amount)} 💎",
+              font=F(13), fill=WHITE)
+    y += 20
+    # "(Total: 50.00m)"
+    draw.text((14, y), f"(Total: {fmt(user_total)})",
+              font=F(13), fill=WHITE)
+    y += 20
+    # "Clan Diamonds: 11.64b"
+    draw.text((14, y), f"Clan Diamonds: {fmt(clan_diamonds)}",
+              font=F(13), fill=WHITE)
+    y += 28
+    # Kleines Diamond
+    draw.text((14, y), "💎", font=F(14), fill=BLUE)
 
-    # Kleines Diamond Icon unten
-    draw.text((18, H-30), "💎", font=_font(16), fill=ACCENT_BLUE)
+    # Datum unten
+    from datetime import datetime
+    dt = datetime.now().strftime("%d.%m.%Y %H:%M")
+    draw.text((14, H-18), dt, font=F(11), fill=GRAY)
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, "PNG")
     buf.seek(0)
     return buf
 
 
-# ─────────────────────────────────────────────────────────────────
-# Ranking Change Bild (wie Screenshot 3)
-# ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# 3.  RANKING CHANGE  (Screenshot 3)
+#     "[ZYXE]  Position Decreased by 1"
+#     #98 ›› #99   (rot)  oder  #99 ›› #98  (grün)
+#     Contributions 117.64k
+# ══════════════════════════════════════════════════════════════════
 async def generate_ranking_change(clan_name: str, old_rank: int,
                                    new_rank: int, contributions: int,
-                                   clan_icon: str = "") -> io.BytesIO:
-    W, H = 500, 180
-    went_up   = new_rank < old_rank
-    delta     = abs(new_rank - old_rank)
-    bar_color = ACCENT_GREEN if went_up else ACCENT_RED
+                                   icon_str: str = "") -> io.BytesIO:
+    W, H    = 480, 155
+    went_up = new_rank < old_rank
+    delta   = abs(new_rank - old_rank)
+    new_col = GREEN if went_up else RED
     direction = f"Position {'Increased' if went_up else 'Decreased'} by {delta}"
 
-    img  = Image.new("RGB", (W, H), BG_CARD)
+    img  = Image.new("RGB", (W, H), BG2)
     draw = ImageDraw.Draw(img)
     for y in range(H):
-        v = int(5*y/H)
-        draw.line([(0,y),(W,y)], fill=(25+v,28+v,38+v))
+        v = int(6*y/H)
+        draw.line([(0,y),(W,y)], fill=(37+v,39+v,46+v))
 
-    draw.rectangle([0, 0, 4, H], fill=bar_color)
+    # Karten-Box (dunkler Hintergrund mit Rand)
+    rrect(draw, [8, 8, W-8, H-8], r=10,
+          fill=(40, 42, 50), outline=(55, 58, 70), ow=1)
 
-    # Titel
-    draw.text((18, 15), f"{clan_name.upper()} RANKING",
-              font=_font(18, bold=True), fill=TEXT_WHITE)
+    # Clan Icon links in Box
+    icon = await get_icon(icon_str, 38)
+    IX, IY = 18, 18
+    if icon:
+        img.paste(icon, (IX, IY), icon)
+    else:
+        draw.ellipse([IX, IY, IX+38, IY+38], fill=BLUE)
+        draw.text((IX+19, IY+19), clan_name[0], font=F(16,True),
+                  fill=WHITE, anchor="mm")
 
-    # Icon
-    icon_img = await fetch_clan_icon(clan_icon)
-    if icon_img:
-        ic = make_circular(icon_img, 60)
-        img.paste(ic, (W-80, 15), ic)
+    # "[ZYXE]"
+    draw.text((IX+46, IY+2), f"[{clan_name.upper()}]",
+              font=F(15, True), fill=WHITE)
 
-    # Card Hintergrund
-    _rounded_rect(draw, [18, 50, W-18, H-15], radius=10,
-                  fill=(30, 33, 45), outline=(50, 55, 75), outline_width=1)
+    # "Position Decreased by 1" – rechts
+    draw.text((W-18, IY+4), direction,
+              font=F(11), fill=new_col, anchor="ra")
 
-    # Clan Name in Card
-    draw.text((30, 62), f"[{clan_name.upper()}]",
-              font=_font(16, bold=True), fill=TEXT_WHITE)
-    draw.text((W//2, 62), direction,
-              font=_font(12), fill=bar_color, anchor="mt")
+    # Rank Zahlen: #98 ›› #99
+    y_rank = 68
+    draw.text((22, y_rank), f"#{old_rank}",
+              font=F(38, True), fill=WHITE)
 
-    # Rank Änderung: #98 → #99
-    draw.text((50, 88), f"#{old_rank}",
-              font=_font(36, bold=True), fill=TEXT_WHITE)
-    draw.text((50 + 90, 100), "›", font=_font(30), fill=TEXT_GRAY)
-    new_col = ACCENT_GREEN if went_up else ACCENT_RED
-    draw.text((50 + 130, 88), f"#{new_rank}",
-              font=_font(36, bold=True), fill=new_col)
+    # Pfeil ›› (wie im Screenshot – breit)
+    arr_x = 22 + len(f"#{old_rank}") * 22 + 10
+    draw.text((arr_x, y_rank+10), "»", font=F(28, True), fill=GRAY)
 
-    # Contributions
-    draw.text((30, H-30), "Contributions ",
-              font=_font(13), fill=TEXT_GRAY)
-    draw.text((30 + 110, H-30), _fmt(contributions),
-              font=_font(13, bold=True), fill=TEXT_WHITE)
+    new_x = arr_x + 36
+    draw.text((new_x, y_rank), f"#{new_rank}",
+              font=F(38, True), fill=new_col)
+
+    # "Contributions 117.64k"
+    draw.text((22, H-26), "Contributions ",
+              font=F(12), fill=GRAY)
+    draw.text((22 + 100, H-26), fmt(contributions),
+              font=F(12, True), fill=WHITE)
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, "PNG")
     buf.seek(0)
     return buf
 
 
-# ─────────────────────────────────────────────────────────────────
-# Player Joined / Left Bild (wie Screenshot 4)
-# ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# 4.  PLAYER JOINED / LEFT  (Screenshot 4)
+#     "Player Joined"  NEW MEMBER
+#     👤 74/75 Members
+#     → Sora (Assoum1) joined [ZYXE]
+#     User: Sora (Assoum1)
+# ══════════════════════════════════════════════════════════════════
 async def generate_player_event(roblox_user: str, member_count: int,
                                  capacity: int, clan_name: str,
                                  joined: bool = True) -> io.BytesIO:
-    W, H  = 500, 160
-    color = ACCENT_GREEN if joined else ACCENT_RED
-    title = "Player Joined" if joined else "Player Left"
-    label = "NEW MEMBER" if joined else "MEMBER LEFT"
+    W, H   = 480, 148
+    color  = GREEN if joined else RED
+    title  = "Player Joined" if joined else "Player Left"
+    label  = "NEW MEMBER" if joined else "MEMBER LEFT"
+    action = "joined" if joined else "left"
 
-    img  = Image.new("RGB", (W, H), BG_CARD)
+    img  = Image.new("RGB", (W, H), BG2)
     draw = ImageDraw.Draw(img)
     for y in range(H):
-        v = int(5*y/H)
-        draw.line([(0,y),(W,y)], fill=(25+v,28+v,38+v))
-    draw.rectangle([0, 0, 4, H], fill=color)
+        v = int(6*y/H)
+        draw.line([(0,y),(W,y)], fill=(37+v,39+v,46+v))
 
-    # Avatar Kreis rechts
-    _rounded_rect(draw, [W-90, 15, W-15, 90], radius=38, fill=(40,44,55))
-    draw.text((W-52, 52), "👤", font=_font(28), fill=color, anchor="mm")
+    # Karten-Box
+    rrect(draw, [8, 8, W-8, H-8], r=10,
+          fill=(40, 42, 50), outline=color, ow=1)
 
-    # Labels
-    draw.text((18, 15), f"{'📥' if joined else '📤'} {title}",
-              font=_font(18, bold=True), fill=color)
-    draw.text((18, 45), label, font=_font(11, bold=True), fill=TEXT_GRAY)
+    # Kleiner Label oben
+    draw.text((18, 15), label, font=F(9, True), fill=GRAY)
 
-    # Content
-    draw.text((18, 62), f"👤 {member_count}/{capacity} Members",
-              font=_font(13), fill=TEXT_GRAY)
-    arrow = "➜"
-    action = "joined" if joined else "left"
-    draw.text((18, 83), f"{arrow} {roblox_user} ({roblox_user}) {action} [{clan_name}]",
-              font=_font(13), fill=TEXT_WHITE)
-    draw.text((18, H-30), f"User: {roblox_user} ({roblox_user})",
-              font=_font(13, bold=True), fill=TEXT_WHITE)
+    # Avatar Kreis rechts (wie im Screenshot)
+    AV = 64
+    AX, AY = W-AV-20, 20
+    draw.ellipse([AX, AY, AX+AV, AY+AV],
+                 fill=(50, 54, 65), outline=color, width=2)
+    draw.text((AX+AV//2, AY+AV//2), "👤",
+              font=F(24), fill=WHITE, anchor="mm")
+
+    # Titel "Player Joined" / "Player Left"
+    draw.text((18, 28), title, font=F(20, True), fill=color)
+
+    # Mitglieder-Zahl
+    draw.text((18, 58), f"👤 {member_count}/{capacity} Members",
+              font=F(12), fill=GRAY)
+
+    # Pfeil + Name
+    draw.text((18, 78), f"→ {roblox_user} ({roblox_user}) {action} [{clan_name}]",
+              font=F(12), fill=WHITE)
+
+    # "User: Sora (Assoum1)"
+    draw.text((18, H-26), f"User: {roblox_user} ({roblox_user})",
+              font=F(13, True), fill=WHITE)
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, "PNG")
     buf.seek(0)
     return buf
 
 
-# ─────────────────────────────────────────────────────────────────
-# Top Contributors Bild (wie Screenshot 5)
-# ─────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# 5.  TOP CONTRIBUTORS  (Screenshot 5)
+#     "Top Clanwar Contributors for ZYXE"
+#     Current Event: StarryBattle
+#     Current Rank: 96  |  Total Stars: 161.01k
+#     Kick Cooldown / End
+#     1. Shudin617 (Chubbylals) ⭐ 6.66k
+#     ...10 Einträge
+# ══════════════════════════════════════════════════════════════════
 async def generate_top_contributors(clan_data: dict, clan_name: str,
-                                     rank: int | None, battle_name: str,
+                                     rank, battle_name: str,
                                      uid_map: dict,
-                                     clan_icon: str = "") -> io.BytesIO:
-    battle    = sorted(clan_data.get("Contribution",{}).get("Battle",[]),
-                       key=lambda x: x.get("Points",0), reverse=True)
-    top10     = battle[:10]
+                                     icon_str: str = "") -> io.BytesIO:
+    battle   = sorted(clan_data.get("Contribution",{}).get("Battle",[]),
+                      key=lambda x: x.get("Points",0), reverse=True)
+    top10    = battle[:10]
     total_pts = sum(m.get("Points",0) for m in battle)
-    kick_cd   = clan_data.get("LastKickTimestamp")
-    mc        = len(clan_data.get("Members",[]))
-    capacity  = clan_data.get("MemberCapacity",75)
+    kick_cd  = clan_data.get("LastKickTimestamp")
+    mc       = len(clan_data.get("Members",[]))
+    cap      = clan_data.get("MemberCapacity",75)
 
-    W = 420
-    H = 80 + len(top10)*38 + 40
-    img  = Image.new("RGB", (W, H), BG_CARD)
+    W  = 400
+    H  = 50 + 110 + len(top10)*42 + 50
+    img  = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
     for y in range(H):
-        v = int(8*y/H)
-        draw.line([(0,y),(W,y)], fill=(22+v,25+v,35+v))
-    draw.rectangle([0,0,4,H], fill=ACCENT_GOLD)
+        v = int(10*y/H)
+        draw.line([(0,y),(W,y)], fill=(28+v,30+v,38+v))
 
-    # Icon rechts oben
-    icon_img = await fetch_clan_icon(clan_icon)
-    if icon_img:
-        ic = make_circular(icon_img, 64)
-        img.paste(ic, (W-80, 10), ic)
+    # Clan Icon oben rechts (wie im Screenshot)
+    icon = await get_icon(icon_str, 80)
+    if icon:
+        img.paste(icon, (W-90, 8), icon)
 
     # Titel
-    draw.text((14, 12), f"Top Clanwar Contributors", font=_font(15, bold=True), fill=TEXT_WHITE)
-    draw.text((14, 32), f"for {clan_name}", font=_font(13, bold=True), fill=ACCENT_GOLD)
+    y = 10
+    draw.text((12, y), "Top Clanwar Contributors for", font=F(14,True), fill=WHITE)
+    y += 22
+    draw.text((12, y), clan_name, font=F(16,True), fill=WHITE)
 
-    # Stats
-    y = 55
-    stats_text = f"Current Event: {battle_name}   Rank: #{rank if rank else '?'}   Stars: {_fmt(total_pts)} ⭐"
-    draw.text((14, y), stats_text, font=_font(11), fill=TEXT_GRAY)
+    # Stats-Block (wie Screenshot – untereinander)
+    y += 28
+    stats = [
+        ("Current Event:", battle_name),
+        ("Current Rank:",  str(rank) if rank else "?"),
+        ("Total Stars:",   f"{fmt(total_pts)} ⭐"),
+        ("Kick Cooldown:", f"<t:{kick_cd}:R>" if kick_cd else "in einem Tag"),
+    ]
+    for label, val in stats:
+        draw.text((12, y), label, font=F(12), fill=GRAY)
+        draw.text((12+130, y), val, font=F(12,True), fill=WHITE)
+        y += 18
 
     # Trennlinie
-    draw.line([(0, 75), (W, 75)], fill=(40,44,60))
+    y += 6
+    draw.line([(0, y), (W, y)], fill=(50,52,60))
+    y += 10
 
-    # Top 10 Liste
-    medals = ["🥇","🥈","🥉"]
+    # Top 10 Liste (genau wie Screenshot)
     for i, m in enumerate(top10):
-        uid  = m.get("UserID","?")
-        name = uid_map.get(uid, f"UserID {uid}")
-        pts  = m.get("Points",0)
-        ry   = 80 + i*38
+        uid   = m.get("UserID","?")
+        name  = uid_map.get(uid, f"UserID {uid}")
+        pts   = m.get("Points",0)
 
         if i % 2 == 0:
-            draw.rectangle([0, ry, W, ry+36], fill=(28,31,42))
+            draw.rectangle([0, y-2, W, y+38], fill=(33,35,42))
 
-        medal = medals[i] if i < 3 else f"{i+1}."
-        draw.text((14, ry+8), f"{medal}", font=_font(14), fill=ACCENT_GOLD)
-        draw.text((50, ry+8), name, font=_font(13, bold=True), fill=TEXT_WHITE)
-        draw.text((50, ry+24), f"⭐ {_fmt(pts)}", font=_font(11), fill=TEXT_GRAY)
-        draw.text((W-14, ry+12), _fmt(pts), font=_font(13, bold=True),
-                  fill=ACCENT_GOLD, anchor="ra")
+        # Nummer
+        draw.text((12, y+2), f"{i+1}.", font=F(13,True), fill=GOLD)
+
+        # Name + (DisplayName) genau wie Screenshot
+        draw.text((38, y+2), name, font=F(13,True), fill=WHITE)
+
+        # ⭐ Punkte
+        draw.text((38, y+20), f"⭐ {fmt(pts)}", font=F(12), fill=GRAY)
+
+        y += 42
+
+    # Footer Buttons (wie Screenshot – nur Dekoration)
+    rrect(draw, [10, H-40, 90, H-12], r=6, fill=(88,101,242))
+    draw.text((50, H-26), "Back", font=F(12,True), fill=WHITE, anchor="mm")
+    rrect(draw, [100, H-40, 180, H-12], r=6, fill=(88,101,242))
+    draw.text((140, H-26), "Next", font=F(12,True), fill=WHITE, anchor="mm")
+    rrect(draw, [190, H-40, 270, H-12], r=6, fill=(79,84,92))
+    draw.text((230, H-26), "Close", font=F(12,True), fill=WHITE, anchor="mm")
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img.save(buf, "PNG")
     buf.seek(0)
     return buf
